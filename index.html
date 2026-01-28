@@ -79,14 +79,24 @@
         };
 
         const formatDateKey = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-        const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
-        const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+        
+        const getDaysInMonth = (year, month) => {
+            const y = parseInt(year, 10);
+            const m = parseInt(month, 10);
+            if (isNaN(y) || isNaN(m)) return 31;
+            return new Date(y, m + 1, 0).getDate();
+        };
 
-        // 智慧型時間處理：支援 hh:mm:ss 或 hh:mm，轉為 HTML5 支援的 hh:mm
+        const getFirstDayOfMonth = (year, month) => {
+            const y = parseInt(year, 10);
+            const m = parseInt(month, 10);
+            if (isNaN(y) || isNaN(m)) return 0;
+            return new Date(y, m, 1).getDay();
+        };
+
         const cleanToShortTime = (val) => {
             if (!val) return '';
             const str = val.toString().trim();
-            // 處理 Google Sheets 可能匯出的 "2024/05/20 09:00:00" 格式
             const timePart = str.includes(' ') ? str.split(/\s+/)[1] : str;
             const match = timePart.match(/(\d{1,2}):(\d{1,2})/);
             if (match) {
@@ -95,35 +105,62 @@
             return '';
         };
 
-        // 智慧型日期處理：將 yyyy/mm/dd 轉為系統內部 key
+        // 核心更新：採用 Component Parsing 手動拆解年月日，避免時區偏移
         const cleanToDateKey = (val) => {
             if (!val) return null;
-            const cleanVal = val.toString().trim().replace(/\//g, '-');
-            const d = new Date(cleanVal);
-            if (isNaN(d.getTime())) return null;
-            return formatDateKey(d.getFullYear(), d.getMonth(), d.getDate());
+            const str = val.toString().trim();
+            // 抓取 YYYY, MM, DD 數值，相容 / 或 - 分隔符
+            const match = str.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+            if (match) {
+                const y = parseInt(match[1], 10);
+                const m = parseInt(match[2], 10) - 1; // JS Date month is 0-indexed
+                const d = parseInt(match[3], 10);
+                return formatDateKey(y, m, d);
+            }
+            // 備用方案
+            const fallbackDate = new Date(str);
+            if (!isNaN(fallbackDate.getTime())) {
+                return formatDateKey(fallbackDate.getFullYear(), fallbackDate.getMonth(), fallbackDate.getDate());
+            }
+            return null;
         };
 
-        // 強健型 CSV 解析器
+        // 穩健的 CSV 解析器
         const parseCSV = (text) => {
-            const rows = [];
-            const pattern = /"([^"]*(?:""[^"]*)*)"|([^,]+)|(?<=,|^)(?=,|$)/g;
+            if (!text) return { headers: [], data: [] };
             const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
-            
             if (lines.length === 0) return { headers: [], data: [] };
 
-            const parseLine = (line) => {
-                const matches = [];
-                let match;
-                while ((match = pattern.exec(line)) !== null) {
-                    matches.push((match[1] !== undefined ? match[1].replace(/""/g, '"') : match[2]) || "");
+            const splitLine = (line) => {
+                const result = [];
+                let current = '';
+                let inQuotes = false;
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    if (char === '"') {
+                        if (inQuotes && line[i+1] === '"') {
+                            current += '"';
+                            i++;
+                        } else {
+                            inQuotes = !inQuotes;
+                        }
+                    } else if (char === ',' && !inQuotes) {
+                        result.push(current.trim());
+                        current = '';
+                    } else {
+                        current += char;
+                    }
                 }
-                return matches;
+                result.push(current.trim());
+                return result;
             };
 
-            const headers = parseLine(lines[0]).map(h => h.trim());
+            const rawHeaders = splitLine(lines[0]);
+            // 清理標題列中的不可見字元 (BOM or spaces)
+            const headers = rawHeaders.map(h => h.replace(/[^\x20-\x7E\u4e00-\u9fa5]/g, '').trim());
+
             const data = lines.slice(1).map(line => {
-                const values = parseLine(line);
+                const values = splitLine(line);
                 return headers.reduce((obj, header, i) => {
                     obj[header] = values[i] || "";
                     return obj;
@@ -194,21 +231,18 @@
                 try {
                     const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
                     const response = await fetch(csvUrl);
-                    if (!response.ok) throw new Error('連線失敗。請確認試算表「共用」設定為「知道連結的人均可檢視」。');
+                    if (!response.ok) throw new Error('讀取失敗。請確認試算表共用設定。');
                     const text = await response.text();
                     const parsed = parseCSV(text);
-                    if (parsed.headers.length === 0) throw new Error('CSV 格式異常，無法解析標題。');
+                    if (parsed.headers.length === 0) throw new Error('試算表內容為空。');
                     
-                    console.log("解析結果標題:", parsed.headers);
-                    console.log("解析結果首行數據:", parsed.data[0]);
-
                     setTempData(parsed);
                     
-                    // 根據您提到的欄位名稱自動匹配
+                    // 自動匹配
                     setMapping({
-                        date: parsed.headers.find(h => h === '日期欄位' || h.includes('日期')) || '',
-                        start: parsed.headers.find(h => h === '上班時間' || h.includes('上班')) || '',
-                        end: parsed.headers.find(h => h === '下班時間' || h.includes('下班')) || ''
+                        date: mapping.date || parsed.headers.find(h => h.includes('日期')) || '',
+                        start: mapping.start || parsed.headers.find(h => h.includes('上班時間')) || '',
+                        end: mapping.end || parsed.headers.find(h => h.includes('下班時間')) || ''
                     });
                     setStep(2);
                 } catch (err) {
@@ -220,7 +254,7 @@
 
             const executeSync = () => {
                 if (!mapping.date || !mapping.start || !mapping.end) {
-                    alert('請選擇完整的日期、上班時間與下班時間對應欄位！');
+                    alert('請選擇正確的對應欄位！');
                     return;
                 }
                 onSync({ sheetId, mapping }, tempData.data);
@@ -245,7 +279,7 @@
                             }),
                             error && React.createElement('p', { key: 'e', className: "text-xs text-red-500" }, error)
                         ]) : React.createElement('div', { className: "space-y-3" }, [
-                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500 mb-2" }, "成功抓取！請確認對應欄位："),
+                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500 mb-2" }, "抓取成功！請確認欄位對應："),
                             ['日期欄位', 'date'], ['上班時間', 'start'], ['下班時間', 'end']
                         ].map(m => Array.isArray(m) ? React.createElement('div', { key: m[1] }, [
                             React.createElement('label', { className: "text-[10px] font-bold text-slate-400 block mb-1" }, m[0]),
@@ -261,10 +295,10 @@
                     ),
                     React.createElement('div', { className: "p-6 bg-slate-50 flex gap-2" }, [
                         step === 1 
-                        ? React.createElement('button', { onClick: handleFetch, className: "w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700" }, isLoading ? "讀取中..." : "下一步：對應欄位")
+                        ? React.createElement('button', { onClick: handleFetch, className: "w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700" }, isLoading ? "連線中..." : "下一步")
                         : [
                             React.createElement('button', { key: 'b', onClick: () => setStep(1), className: "flex-1 bg-white border py-3 rounded-xl font-bold hover:bg-slate-100" }, "返回"),
-                            React.createElement('button', { key: 's', onClick: executeSync, className: "flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700" }, "確認同步")
+                            React.createElement('button', { key: 's', onClick: executeSync, className: "flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700" }, "儲存同步")
                         ]
                     ])
                 ])
@@ -282,7 +316,7 @@
             const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
             useEffect(() => {
-                const saved = localStorage.getItem('salary-v10-pro');
+                const saved = localStorage.getItem('salary-v12-final');
                 if (saved) {
                     const parsed = JSON.parse(saved);
                     setCalendarData(parsed.data || {});
@@ -292,7 +326,7 @@
             }, []);
 
             useEffect(() => {
-                localStorage.setItem('salary-v10-pro', JSON.stringify({ data: calendarData, rate: hourlyRate, sync: syncConfig }));
+                localStorage.setItem('salary-v12-final', JSON.stringify({ data: calendarData, rate: hourlyRate, sync: syncConfig }));
             }, [calendarData, hourlyRate, syncConfig]);
 
             const handleUpdateEntry = useCallback((dateKey, updates) => {
@@ -308,52 +342,38 @@
                 const newEntries = { ...calendarData };
                 const dayGroups = {};
                 
-                rows.forEach((row, index) => {
+                rows.forEach(row => {
                     const dateKey = cleanToDateKey(row[config.mapping.date]);
                     if (!dateKey) return;
-                    
                     const start = cleanToShortTime(row[config.mapping.start]);
                     const end = cleanToShortTime(row[config.mapping.end]);
-                    
-                    if (start || end) {
-                        dayGroups[dateKey] = { start, end };
-                    }
+                    if (start || end) dayGroups[dateKey] = { start, end };
                 });
 
                 let updatedCount = 0;
                 let vacationCount = 0;
-                
                 const daysInMonth = getDaysInMonth(year, month);
+
                 for (let d = 1; d <= daysInMonth; d++) {
                     const dateKey = formatDateKey(year, month, d);
                     const record = dayGroups[dateKey];
-                    
                     if (record && record.start && record.end) {
                         newEntries[dateKey] = {
-                            dateKey,
-                            start: record.start,
-                            end: record.end,
-                            skipped: false,
-                            duration: calculateDuration(record.start, record.end)
+                            dateKey, start: record.start, end: record.end,
+                            skipped: false, duration: calculateDuration(record.start, record.end)
                         };
                         updatedCount++;
                     } else {
-                        // 無打卡記錄者，自動標記為「休假」
                         const dayOfWeek = new Date(year, month, d).getDay();
-                        const defaults = getDefaultTimes(dayOfWeek);
                         newEntries[dateKey] = {
-                            ...defaults,
-                            dateKey,
-                            skipped: true,
-                            duration: 0
+                            ...getDefaultTimes(dayOfWeek), dateKey, skipped: true, duration: 0
                         };
                         vacationCount++;
                     }
                 }
-
                 setSyncConfig(config);
                 setCalendarData(newEntries);
-                alert(`同步完成！\n📊 成功比對出勤記錄：${updatedCount} 筆\n🛌 無記錄自動標記休假：${vacationCount} 天`);
+                alert(`同步完成！\n📅 目前月份：${year}年 ${month+1}月\n📊 成功比對：${updatedCount} 筆資料\n🛌 無記錄標記休假：${vacationCount} 天`);
             };
 
             const fastSync = async () => {
@@ -370,7 +390,7 @@
                     const parsed = parseCSV(text);
                     processSync(syncConfig, parsed.data);
                 } catch (e) {
-                    alert('同步失敗，請檢查網路、試算表 ID 或共用權限。');
+                    alert('同步失敗，請確認試算表 ID 與網路狀態。');
                 } finally {
                     setIsSyncing(false);
                 }
@@ -378,7 +398,8 @@
 
             const totalHours = useMemo(() => {
                 let total = 0;
-                for (let d = 1; d <= getDaysInMonth(year, month); d++) {
+                const daysInMonth = getDaysInMonth(year, month);
+                for (let d = 1; d <= daysInMonth; d++) {
                     const key = formatDateKey(year, month, d);
                     const entry = calendarData[key] || { ...getDefaultTimes(new Date(year, month, d).getDay()) };
                     if (!entry.skipped) total += calculateDuration(entry.start, entry.end);
@@ -387,14 +408,14 @@
             }, [year, month, calendarData]);
 
             const daysGrid = useMemo(() => {
-                const grid = Array(getFirstDayOfMonth(year, month)).fill(null);
-                for (let d = 1; d <= getDaysInMonth(year, month); d++) {
+                const firstDay = getFirstDayOfMonth(year, month);
+                const grid = Array.from({ length: Math.max(0, firstDay) }, () => null);
+                const daysInMonth = getDaysInMonth(year, month);
+                for (let d = 1; d <= daysInMonth; d++) {
                     const dateKey = formatDateKey(year, month, d);
                     const dayOfWeek = new Date(year, month, d).getDay();
                     grid.push({ 
-                        day: d, 
-                        dateKey, 
-                        dayOfWeek, 
+                        day: d, dateKey, dayOfWeek, 
                         entry: calendarData[dateKey] || { dateKey, ...getDefaultTimes(dayOfWeek), duration: 0 } 
                     });
                 }
@@ -406,9 +427,9 @@
                     React.createElement('div', null, [
                         React.createElement('h1', { className: "text-3xl font-extrabold text-slate-800 flex items-center gap-3" }, [
                             "薪資自動計算系統",
-                            syncConfig.mapping && React.createElement('span', { className: "px-2 py-0.5 bg-emerald-100 text-emerald-600 text-[10px] rounded-full" }, "雲端連動中")
+                            syncConfig.mapping && React.createElement('span', { className: "px-2 py-0.5 bg-emerald-100 text-emerald-600 text-[10px] rounded-full" }, "連動正常")
                         ]),
-                        React.createElement('p', { className: "text-slate-500 no-print" }, "三欄位自動比對模式：日期欄位、上班時間、下班時間")
+                        React.createElement('p', { className: "text-slate-500 no-print" }, "精準同步模式：自動抓取日期與起訖時間")
                     ]),
                     React.createElement('div', { className: "flex items-center gap-4 no-print" }, [
                         React.createElement('button', { 
