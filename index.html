@@ -73,25 +73,22 @@
         };
 
         const getDefaultTimes = (dayOfWeek) => {
+            // 週二 (2): 16:00 - 18:00
             if (dayOfWeek === 2) return { start: '16:00', end: '18:00', skipped: false };
+            // 週日 (0), 週六 (6): 預設休假
             if (dayOfWeek === 0 || dayOfWeek === 6) return { start: '', end: '', skipped: true };
+            // 其他: 11:30 - 18:30 (下班時間 06:30 PM)
             return { start: '11:30', end: '18:30', skipped: false };
         };
 
         const formatDateKey = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         
         const getDaysInMonth = (year, month) => {
-            const y = parseInt(year, 10);
-            const m = parseInt(month, 10);
-            if (isNaN(y) || isNaN(m)) return 31;
-            return new Date(y, m + 1, 0).getDate();
+            return new Date(parseInt(year), parseInt(month) + 1, 0).getDate();
         };
 
         const getFirstDayOfMonth = (year, month) => {
-            const y = parseInt(year, 10);
-            const m = parseInt(month, 10);
-            if (isNaN(y) || isNaN(m)) return 0;
-            return new Date(y, m, 1).getDay();
+            return new Date(parseInt(year), parseInt(month), 1).getDay();
         };
 
         const cleanToShortTime = (val) => {
@@ -105,27 +102,22 @@
             return '';
         };
 
-        // 核心更新：採用 Component Parsing 手動拆解年月日，避免時區偏移
+        // 核心更新：更強大的日期比對，完美支援 2026/01/28 格式
         const cleanToDateKey = (val) => {
             if (!val) return null;
             const str = val.toString().trim();
-            // 抓取 YYYY, MM, DD 數值，相容 / 或 - 分隔符
-            const match = str.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+            // 匹配 YYYY/MM/DD 或 YYYY-MM-DD，包括單數字月份
+            const match = str.match(/(\d{4})[./\-](\d{1,2})[./\-](\d{1,2})/);
             if (match) {
                 const y = parseInt(match[1], 10);
-                const m = parseInt(match[2], 10) - 1; // JS Date month is 0-indexed
+                const m = parseInt(match[2], 10) - 1; 
                 const d = parseInt(match[3], 10);
                 return formatDateKey(y, m, d);
-            }
-            // 備用方案
-            const fallbackDate = new Date(str);
-            if (!isNaN(fallbackDate.getTime())) {
-                return formatDateKey(fallbackDate.getFullYear(), fallbackDate.getMonth(), fallbackDate.getDate());
             }
             return null;
         };
 
-        // 穩健的 CSV 解析器
+        // 穩健的 CSV 解析器，處理 BOM 與引號
         const parseCSV = (text) => {
             if (!text) return { headers: [], data: [] };
             const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
@@ -156,8 +148,8 @@
             };
 
             const rawHeaders = splitLine(lines[0]);
-            // 清理標題列中的不可見字元 (BOM or spaces)
-            const headers = rawHeaders.map(h => h.replace(/[^\x20-\x7E\u4e00-\u9fa5]/g, '').trim());
+            // 處理標題列：移除 BOM (\ufeff) 並清理前後空白
+            const headers = rawHeaders.map(h => h.replace(/^\ufeff/, "").trim());
 
             const data = lines.slice(1).map(line => {
                 const values = splitLine(line);
@@ -231,14 +223,14 @@
                 try {
                     const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
                     const response = await fetch(csvUrl);
-                    if (!response.ok) throw new Error('讀取失敗。請確認試算表共用設定。');
+                    if (!response.ok) throw new Error('連線失敗。請確認試算表已設為「知道連結的人均可檢視」。');
                     const text = await response.text();
                     const parsed = parseCSV(text);
-                    if (parsed.headers.length === 0) throw new Error('試算表內容為空。');
+                    if (parsed.headers.length === 0) throw new Error('試算表內容完全為空。');
                     
                     setTempData(parsed);
                     
-                    // 自動匹配
+                    // 智慧匹配欄位
                     setMapping({
                         date: mapping.date || parsed.headers.find(h => h.includes('日期')) || '',
                         start: mapping.start || parsed.headers.find(h => h.includes('上班時間')) || '',
@@ -254,7 +246,7 @@
 
             const executeSync = () => {
                 if (!mapping.date || !mapping.start || !mapping.end) {
-                    alert('請選擇正確的對應欄位！');
+                    alert('請正確對應所有欄位！');
                     return;
                 }
                 onSync({ sheetId, mapping }, tempData.data);
@@ -264,12 +256,12 @@
             return React.createElement('div', { className: "fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" }, [
                 React.createElement('div', { key: 'm', className: "bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden" }, [
                     React.createElement('div', { className: "p-6 border-b flex justify-between items-center" }, [
-                        React.createElement('h3', { className: "text-lg font-bold text-slate-800" }, "Google Sheets 同步設定"),
+                        React.createElement('h3', { className: "text-lg font-bold text-slate-800" }, "Google Sheets 同步中心"),
                         React.createElement('button', { onClick: onClose, className: "text-slate-400 hover:text-slate-600" }, "✕")
                     ]),
                     React.createElement('div', { className: "p-6" }, 
                         step === 1 ? React.createElement('div', { className: "space-y-4" }, [
-                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500" }, "請輸入試算表 ID："),
+                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500" }, "請貼上您的試算表 ID："),
                             React.createElement('input', {
                                 key: 'in',
                                 type: "text",
@@ -279,7 +271,7 @@
                             }),
                             error && React.createElement('p', { key: 'e', className: "text-xs text-red-500" }, error)
                         ]) : React.createElement('div', { className: "space-y-3" }, [
-                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500 mb-2" }, "抓取成功！請確認欄位對應："),
+                            React.createElement('p', { key: 'p', className: "text-sm text-slate-500 mb-2" }, `讀取成功！(共 ${tempData.data.length} 筆資料)`),
                             ['日期欄位', 'date'], ['上班時間', 'start'], ['下班時間', 'end']
                         ].map(m => Array.isArray(m) ? React.createElement('div', { key: m[1] }, [
                             React.createElement('label', { className: "text-[10px] font-bold text-slate-400 block mb-1" }, m[0]),
@@ -288,17 +280,17 @@
                                 onChange: e => setMapping(p => ({ ...p, [m[1]]: e.target.value })),
                                 className: "w-full border p-2 rounded-lg text-sm bg-slate-50"
                             }, [
-                                React.createElement('option', { value: "" }, "-- 選擇欄位 --"),
+                                React.createElement('option', { value: "" }, "-- 選擇對應欄位 --"),
                                 ...tempData.headers.map(h => React.createElement('option', { key: h, value: h }, h))
                             ])
                         ]) : m))
                     ),
                     React.createElement('div', { className: "p-6 bg-slate-50 flex gap-2" }, [
                         step === 1 
-                        ? React.createElement('button', { onClick: handleFetch, className: "w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700" }, isLoading ? "連線中..." : "下一步")
+                        ? React.createElement('button', { onClick: handleFetch, className: "w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all" }, isLoading ? "連線中..." : "開始讀取資料")
                         : [
-                            React.createElement('button', { key: 'b', onClick: () => setStep(1), className: "flex-1 bg-white border py-3 rounded-xl font-bold hover:bg-slate-100" }, "返回"),
-                            React.createElement('button', { key: 's', onClick: executeSync, className: "flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700" }, "儲存同步")
+                            React.createElement('button', { key: 'b', onClick: () => setStep(1), className: "flex-1 bg-white border py-3 rounded-xl font-bold hover:bg-slate-100" }, "返回修改"),
+                            React.createElement('button', { key: 's', onClick: executeSync, className: "flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-100" }, "匯入資料")
                         ]
                     ])
                 ])
@@ -316,7 +308,7 @@
             const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
 
             useEffect(() => {
-                const saved = localStorage.getItem('salary-v12-final');
+                const saved = localStorage.getItem('salary-v13-final');
                 if (saved) {
                     const parsed = JSON.parse(saved);
                     setCalendarData(parsed.data || {});
@@ -326,7 +318,7 @@
             }, []);
 
             useEffect(() => {
-                localStorage.setItem('salary-v12-final', JSON.stringify({ data: calendarData, rate: hourlyRate, sync: syncConfig }));
+                localStorage.setItem('salary-v13-final', JSON.stringify({ data: calendarData, rate: hourlyRate, sync: syncConfig }));
             }, [calendarData, hourlyRate, syncConfig]);
 
             const handleUpdateEntry = useCallback((dateKey, updates) => {
@@ -341,16 +333,24 @@
             const processSync = (config, rows) => {
                 const newEntries = { ...calendarData };
                 const dayGroups = {};
-                
+                let totalFoundInSheet = 0;
+                let otherDatesExample = [];
+
                 rows.forEach(row => {
-                    const dateKey = cleanToDateKey(row[config.mapping.date]);
+                    const rawDate = row[config.mapping.date];
+                    const dateKey = cleanToDateKey(rawDate);
                     if (!dateKey) return;
+
+                    totalFoundInSheet++;
                     const start = cleanToShortTime(row[config.mapping.start]);
                     const end = cleanToShortTime(row[config.mapping.end]);
-                    if (start || end) dayGroups[dateKey] = { start, end };
+                    
+                    if (start || end) {
+                        dayGroups[dateKey] = { start, end };
+                    }
                 });
 
-                let updatedCount = 0;
+                let matchedCount = 0;
                 let vacationCount = 0;
                 const daysInMonth = getDaysInMonth(year, month);
 
@@ -362,7 +362,7 @@
                             dateKey, start: record.start, end: record.end,
                             skipped: false, duration: calculateDuration(record.start, record.end)
                         };
-                        updatedCount++;
+                        matchedCount++;
                     } else {
                         const dayOfWeek = new Date(year, month, d).getDay();
                         newEntries[dateKey] = {
@@ -371,9 +371,32 @@
                         vacationCount++;
                     }
                 }
+
+                // 檢查是否有「不在目前月份」但存在於試算表中的資料
+                Object.keys(dayGroups).forEach(key => {
+                    if (!key.startsWith(`${year}-${String(month + 1).padStart(2, '0')}`)) {
+                        otherDatesExample.push(key);
+                    }
+                });
+
                 setSyncConfig(config);
                 setCalendarData(newEntries);
-                alert(`同步完成！\n📅 目前月份：${year}年 ${month+1}月\n📊 成功比對：${updatedCount} 筆資料\n🛌 無記錄標記休假：${vacationCount} 天`);
+
+                const report = [
+                    `✅ 同步成功！`,
+                    `📊 試算表總資料筆數：${totalFoundInSheet} 筆`,
+                    `📅 目前所選月份 (${year}/${month+1})：`,
+                    `   - 成功匯入：${matchedCount} 筆`,
+                    `   - 查無資料 (設為休假)：${vacationCount} 天`,
+                ];
+                
+                if (otherDatesExample.length > 0) {
+                    report.push(`\n⚠️ 偵測到 ${otherDatesExample.length} 筆資料屬於其他月份。`);
+                    report.push(`範例日期：${otherDatesExample.slice(0, 3).join(', ')}`);
+                    report.push(`(如需查看，請在上方手動切換年份或月份)`);
+                }
+
+                alert(report.join('\n'));
             };
 
             const fastSync = async () => {
@@ -390,7 +413,7 @@
                     const parsed = parseCSV(text);
                     processSync(syncConfig, parsed.data);
                 } catch (e) {
-                    alert('同步失敗，請確認試算表 ID 與網路狀態。');
+                    alert('同步失敗。請確認網路、試算表 ID，並確定試算表已設為「公開」或「知道連結的人即可檢視」。');
                 } finally {
                     setIsSyncing(false);
                 }
@@ -427,16 +450,17 @@
                     React.createElement('div', null, [
                         React.createElement('h1', { className: "text-3xl font-extrabold text-slate-800 flex items-center gap-3" }, [
                             "薪資自動計算系統",
-                            syncConfig.mapping && React.createElement('span', { className: "px-2 py-0.5 bg-emerald-100 text-emerald-600 text-[10px] rounded-full" }, "連動正常")
+                            syncConfig.mapping && React.createElement('span', { className: "px-3 py-1 bg-emerald-100 text-emerald-600 text-[10px] rounded-full font-black animate-pulse" }, "雲端連線中")
                         ]),
-                        React.createElement('p', { className: "text-slate-500 no-print" }, "精準同步模式：自動抓取日期與起訖時間")
+                        React.createElement('p', { className: "text-slate-500 no-print" }, "精準同步模式：自動處理 YYYY/MM/DD 與起訖時間")
                     ]),
                     React.createElement('div', { className: "flex items-center gap-4 no-print" }, [
                         React.createElement('button', { 
                             onClick: fastSync,
                             disabled: isSyncing,
-                            className: `p-2.5 bg-emerald-50 text-emerald-600 rounded-xl border border-emerald-100 hover:bg-emerald-100 transition-all ${isSyncing ? 'sync-active' : ''}`
-                        }, React.createElement('span', { className: "text-lg" }, "🔄")),
+                            title: "立即重新同步雲端資料",
+                            className: `p-3 bg-white text-emerald-600 rounded-2xl border border-emerald-100 shadow-sm hover:shadow-md transition-all ${isSyncing ? 'sync-active' : ''}`
+                        }, React.createElement('span', { className: "text-xl" }, "🔄")),
                         React.createElement('div', { className: "flex gap-2 bg-white p-2.5 rounded-2xl shadow-sm border" }, [
                             { label: '年份', val: year, set: setYear, opt: Array.from({length:11}, (_,i)=>currentYear-5+i) },
                             { label: '月份', val: month, set: setMonth, opt: Array.from({length:12}, (_,i)=>i) }
@@ -463,9 +487,9 @@
                         React.createElement('div', { className: "flex gap-3" }, [
                             React.createElement('button', { 
                                 onClick: () => setIsSyncModalOpen(true), 
-                                className: "px-6 py-2.5 bg-emerald-600 text-white border border-emerald-500 rounded-xl hover:bg-emerald-700 transition-all font-bold shadow-sm" 
-                            }, "⚙ 同步設定"),
-                            React.createElement('button', { onClick: () => window.print(), className: "px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-all font-bold shadow-lg shadow-slate-200" }, "列印報表")
+                                className: "px-6 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-all font-bold shadow-sm" 
+                            }, "⚙ 設定連動試算表"),
+                            React.createElement('button', { onClick: () => window.print(), className: "px-6 py-3 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-all font-bold shadow-lg" }, "列印報表")
                         ])
                     ]),
                     React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-3 gap-8 mb-10 print:grid-cols-3 print:gap-4" }, [
